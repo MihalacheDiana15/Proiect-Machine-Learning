@@ -1,0 +1,461 @@
+import re
+import os
+import numpy as np
+from sklearn import svm
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB, MultinomialNB
+from sklearn.model_selection import GridSearchCV
+import nltk
+from collections import Counter
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, classification_report
+from sklearn.utils import shuffle
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+
+print('Autorii acestor texte sunt: ', autori)
+print('Avem', autor_id, 'autori', '\n')
+print('Cele', len(propozitii), 'propozitii sunt: ', propozitii[10:11], '\n')
+print('Avem', len(labels), 'Labels:', labels, '\n')
+print('Texte:', texts[10:11], '\n')
+print('Nume si autor texte:', text_numeautor, '\n')
+print('Text id:', text_ids, '\n')
+
+#Loading the data
+nltk.download('gutenberg')
+nltk.download('punkt')   # Model de tokenizare bazat pe machine learning
+nltk.corpus.gutenberg.fileids()
+
+propozitii = []
+autori = []  # toti autorii posibili
+labels = []  # eticheta numerica pentru fiecare propozitie din dataset
+for text in nltk.corpus.gutenberg.fileids():
+  propozitii_in_text = nltk.corpus.gutenberg.sents(text)
+  propozitii.extend(propozitii_in_text)  # adauga propozitiile din acest text multimii de propozitii
+  autor = text.split("-")[0]
+  if autor not in autori:
+    autori.append(autor)
+  autor_id = autori.index(autor)  # creeaza eticheta numerica corespunzatoare acestui autor
+  labels.extend([autor_id for p in propozitii_in_text])  # adauga etichetele pentru fiecare propozitie din acest text
+
+# Shuffle data before splitting into train/valid/test
+propozitii, labels = shuffle(propozitii, labels, random_state=2345)
+
+text_numeautor = nltk.corpus.gutenberg.fileids()
+texts = []
+
+for i in text_numeautor:
+  text = i
+  #text_id = idx
+  texts.insert(0, nltk.corpus.gutenberg.sents(text))
+print(texts)
+
+text_ids = []
+for idx in range(len(text_numeautor)):
+  text_id = idx
+  text_ids.insert(0, text_id)
+print(text_ids)
+
+
+nltk.download('stopwords') # Lista de cuvinte functionale in mai multe limbi (conjuctii, prepozitii, etc)
+from nltk.corpus import stopwords
+
+def proceseaza(text):
+    text = re.sub("[-.,;:!?\"\'\/()_*=`]", "", text)
+    stops = set(stopwords.words('english'))
+    text_in_cuvinte = nltk.word_tokenize(text)
+    return text_in_cuvinte
+
+data = []
+for propozitie in propozitii:
+  data.append(proceseaza(str(propozitie)))
+
+##DATE ANTRENARE, TESTARE, VALIDARE
+
+# impartim datele de antrenare astfel:
+#    20% date de test din total
+#    15% date de validare din ce ramane dupa ce scoatem datele de test
+
+nr_test = int(20/100 * len(data))
+print("Nr de date de test: ", nr_test)
+
+nr_ramase = len(data) - nr_test
+nr_valid = int(15/100 * nr_ramase)
+print("Nr de date de validare: ", nr_valid)
+
+nr_train = nr_ramase - nr_valid
+print("Nr de date de antrenare: ", nr_train)
+
+# facem impartirea in ordinea in care apar datele
+
+train_data = data[:nr_train]
+train_labels = labels[:nr_train]
+
+valid_data = data[nr_train : nr_train + nr_valid]
+valid_labels = labels[nr_train : nr_train + nr_valid]
+
+test_data = data[nr_train + nr_valid: ]
+test_labels = labels[nr_train + nr_valid:]
+
+print(len(train_labels))
+print(len(valid_labels))
+print(len(test_labels))
+
+counter = Counter()
+for text_preprocesat in train_data:
+    counter.update(text_preprocesat)
+print(counter.most_common(10))
+
+N = 15
+cuvinte_caracteristice = []
+for cuvant, frecventa in counter.most_common(N):
+    if cuvant.strip():
+        cuvinte_caracteristice.append(cuvant)
+print(cuvinte_caracteristice)
+
+
+word2id = {}
+id2word = {}
+for idx, cuv in enumerate(cuvinte_caracteristice):
+    word2id[cuv] = idx
+    id2word[idx] = cuv
+
+print(word2id)
+print(id2word)
+
+
+# 1. numaram toate cuvintele din text
+ctr = Counter(train_data[1])
+
+# 2. prealocam un array care va reprezenta caracteristicile noastre
+features = np.zeros(len(cuvinte_caracteristice))
+
+# 3. umplem array-ul cu valorile obtinute din counter
+# fiecare pozitie din array trebuie sa reprezinte frecventa
+# aceluiasi cuvant in toate textele
+for idx in range(0, len(features)):
+    # obtinem cuvantul pentru pozitia idx
+    cuvant = id2word[idx]
+    # asignam valoarea corespunzatoare frecventei cuvantului
+    features[idx] = ctr[cuvant]
+
+print(features)
+print([id2word[idx] for idx in range(0, len(features))])
+
+
+def count_most_common(how_many, texte_preprocesate):
+    """Functie care returneaza cele mai frecvente cuvinte.
+    """
+    counter = Counter()
+    for text_preprocesat in texte_preprocesate:
+        counter.update(text_preprocesat)
+    cuvinte_caracteristice = []
+    for cuv, _ in counter.most_common(how_many):
+        if cuv.strip():
+            cuvinte_caracteristice.append(cuv)
+    return cuvinte_caracteristice
+
+def build_id_word_dicts(cuvinte_caracteristice):
+    '''Dictionarele word2id si id2word garanteaza o ordine
+    pentru cuvintele caracteristice.
+    '''
+    word2id = {}
+    id2word = {}
+    for idx, cuv in enumerate(cuvinte_caracteristice):
+        word2id[cuv] = idx
+        id2word[idx] = cuv
+    return word2id, id2word
+
+def featurize(text_preprocesat, id2word):
+    """Pentru un text preprocesat dat si un dictionar
+    care mapeaza pentru fiecare pozitie ce cuvant corespunde,
+    returneaza un vector care reprezinta
+    frecventele fiecarui cuvant.
+    """
+    ctr = Counter(text_preprocesat)
+    features = np.zeros(len(id2word))
+    for idx in range(0, len(features)):
+        cuvant = id2word[idx]
+        features[idx] = ctr[cuvant]
+    return features
+
+def featurize_multi(texte, id2word):
+    '''Pentru un set de texte preprocesate si un dictionar
+    care mapeaza pentru fiecare pozitie ce cuvant corespunde,
+    returneaza matricea trasaturilor tuturor textelor.
+    '''
+    all_features = []
+    for text in texte:
+        all_features.append(featurize(text, id2word))
+    return np.array(all_features)
+
+cuvinte_caracteristice = count_most_common(5000, train_data)
+print(len(cuvinte_caracteristice))
+word2id, id2word = build_id_word_dicts(cuvinte_caracteristice)
+
+# SVM
+
+X_train = featurize_multi(train_data, id2word)
+X_valid = featurize_multi(valid_data, id2word)
+X_test = featurize_multi(test_data, id2word)
+
+print(X_train.shape)
+print(X_valid.shape)
+print(X_test.shape)
+
+model = svm.LinearSVC(C=2)
+model.fit(X_train, train_labels)
+predicted_labels_svm = model.predict(X_test)
+vpreds = model.predict(X_valid)
+tpreds = model.predict(X_test)
+
+print(accuracy_score(valid_labels, vpreds))
+print(accuracy_score(test_labels, tpreds))
+
+X_train_nrm = X_train / np.sqrt(np.sum(X_train**2, axis=1)).reshape(-1, 1)
+X_valid_nrm = X_valid / np.sqrt(np.sum(X_valid**2, axis=1)).reshape(-1, 1)
+X_test_nrm = X_test / np.sqrt(np.sum(X_test**2, axis=1)).reshape(-1, 1)
+
+model.fit(X_train_nrm, train_labels)
+vpreds = model.predict(X_valid_nrm)
+tpreds = model.predict(X_test_nrm)
+
+print(accuracy_score(valid_labels, vpreds))
+print(accuracy_score(test_labels, tpreds))
+print(classification_report(test_labels, predicted_labels_svm))
+
+#SVM ---> Schimbarea hiperparametrilor svm
+
+X_train = featurize_multi(train_data, id2word)
+X_valid = featurize_multi(valid_data, id2word)
+X_test = featurize_multi(test_data, id2word)
+
+print(X_train.shape)
+print(X_valid.shape)
+print(X_test.shape)
+
+'''
+model_svm = SVC(kernel='linear', C=1)
+model_svm.fit(X_train, train_labels)
+predicted_labels_svm = model_svm.predict(X_test)
+print(accuracy_score(test_labels, predicted_labels_svm))
+print(classification_report(test_labels, predicted_labels_svm))
+'''
+# Hiperparametri pentru grid search
+svm_params = {
+    'C': [0.1, 1, 10],
+    'kernel': ['linear', 'rbf']
+}
+
+# Grid search pentru SVM
+svm_model = SVC()
+svm_grid_search = GridSearchCV(svm_model, svm_params, cv=3)
+svm_grid_search.fit(X_train, train_labels)
+svm_best_params = svm_grid_search.best_params_
+svm_best_model = SVC(**svm_best_params)
+svm_best_model.fit(X_train, train_labels)
+svm_predicted_labels = svm_best_model.predict(test_data)
+svm_accuracy = accuracy_score(test_labels, svm_predicted_labels)
+
+print("SVM Best Parameters:", svm_best_params)
+print("SVM Accuracy:", svm_accuracy)
+print(classification_report(test_labels, svm_predicted_labels))
+
+#KNN
+
+X_train = featurize_multi(train_data, id2word)
+X_valid = featurize_multi(valid_data, id2word)
+X_test = featurize_multi(test_data, id2word)
+
+print(X_train.shape)
+print(X_valid.shape)
+print(X_test.shape)
+
+model_knn = KNeighborsClassifier(n_neighbors=10)
+model_knn.fit(X_train, train_labels)
+predicted_labels_knn = model_knn.predict(X_test)
+
+print(accuracy_score(test_labels, predicted_labels_knn))
+print(classification_report(test_labels, predicted_labels_knn))
+
+#Schimbarea hiperparametrilor knn
+
+X_train = featurize_multi(train_data, id2word)
+X_valid = featurize_multi(valid_data, id2word)
+X_test = featurize_multi(test_data, id2word)
+
+print(X_train.shape)
+print(X_valid.shape)
+print(X_test.shape)
+'''
+def mydistance(ex1, ex2):
+  return (ex1[0] - ex2[0])**2 + (ex1[1] - ex2[1])**2
+
+model_knn_custom = KNeighborsClassifier(metric=mydistance)
+model_knn_custom = model_knn_custom.fit(X_train, train_labels)
+predicted_labels_knn_custom = model_knn_custom.predict(X_test)
+print(accuracy_score(test_labels, predicted_labels_knn_custom))
+'''
+
+# Hiperparametri pentru grid search
+knn_params = {
+    'n_neighbors': [5, 10, 15]
+}
+
+# Grid search for KNN
+knn_model = KNeighborsClassifier()
+knn_grid_search = GridSearchCV(knn_model, knn_params, cv=3)
+knn_grid_search.fit(X_train, train_labels)
+
+knn_best_params = knn_grid_search.best_params_
+knn_best_model = KNeighborsClassifier(**knn_best_params)
+knn_best_model.fit(X_train, train_labels)
+knn_predicted_labels = knn_best_model.predict(test_data)
+knn_accuracy = accuracy_score(test_labels, knn_predicted_labels)
+
+print("KNN Best Parameters:", knn_best_params)
+print("KNN Accuracy:", knn_accuracy)
+print(accuracy_score(test_labels, knn_predicted_labels))
+
+#Naive Bayes
+
+cuvinte_caracteristice = count_most_common(5000, train_data)
+print(len(cuvinte_caracteristice))
+word2id, id2word = build_id_word_dicts(cuvinte_caracteristice)
+
+X_train = featurize_multi(train_data, id2word)
+X_valid = featurize_multi(valid_data, id2word)
+X_test = featurize_multi(test_data, id2word)
+
+print(X_train.shape)
+print(X_valid.shape)
+print(X_test.shape)
+
+model_bayes = GaussianNB()
+model_bayes = model_bayes.fit(X_train, train_labels)
+predicted_labels_bayes = model_bayes.predict(X_test)
+print(accuracy_score(test_labels, predicted_labels_bayes))
+
+print(classification_report(test_labels, predicted_labels_bayes))
+
+
+##DATE ANTRENARE, TESTARE, VALIDARE
+
+# impartim datele de antrenare astfel:
+#    20% date de test din total
+#    15% date de validare din ce ramane dupa ce scoatem datele de test
+
+nr_test = int(20/100 * len(data))
+print("Nr de date de test: ", nr_test)
+
+nr_ramase = len(data) - nr_test
+nr_valid = int(15/100 * nr_ramase)
+print("Nr de date de validare: ", nr_valid)
+
+nr_train = nr_ramase - nr_valid
+print("Nr de date de antrenare: ", nr_train)
+
+# facem impartirea in ordinea in care apar datele
+
+train_data = data[:nr_train]
+train_labels = labels[:nr_train]
+
+valid_data = data[nr_train : nr_train + nr_valid]
+valid_labels = labels[nr_train : nr_train + nr_valid]
+
+test_data = data[nr_train + nr_valid: ]
+test_labels = labels[nr_train + nr_valid:]
+
+
+
+cuvinte_caracteristice = count_most_common(5000, train_data)
+print(len(cuvinte_caracteristice))
+word2id, id2word = build_id_word_dicts(cuvinte_caracteristice)
+
+
+counter = Counter()
+for text_preprocesat in train_data:
+    counter.update(text_preprocesat)
+print(counter.most_common(10))
+
+N = 15
+cuvinte_caracteristice = []
+for cuvant, frecventa in counter.most_common(N):
+    if cuvant.strip():
+        cuvinte_caracteristice.append(cuvant)
+print(cuvinte_caracteristice)
+
+
+word2id = {}
+id2word = {}
+for idx, cuv in enumerate(cuvinte_caracteristice):
+    word2id[cuv] = idx
+    id2word[idx] = cuv
+
+print(word2id)
+print(id2word)
+
+
+# 1. numaram toate cuvintele din text
+ctr = Counter(train_data[1])
+
+# 2. prealocam un array care va reprezenta caracteristicile noastre
+features = np.zeros(len(cuvinte_caracteristice))
+
+# 3. umplem array-ul cu valorile obtinute din counter
+# fiecare pozitie din array trebuie sa reprezinte frecventa
+# aceluiasi cuvant in toate textele
+for idx in range(0, len(features)):
+    # obtinem cuvantul pentru pozitia idx
+    cuvant = id2word[idx]
+    # asignam valoarea corespunzatoare frecventei cuvantului
+    features[idx] = ctr[cuvant]
+
+print(features)
+print([id2word[idx] for idx in range(0, len(features))])
+
+def count_most_common(how_many, texte_preprocesate):
+    """Functie care returneaza cele mai frecvente cuvinte.
+    """
+    counter = Counter()
+    for text_preprocesat in texte_preprocesate:
+        counter.update(text_preprocesat)
+    cuvinte_caracteristice = []
+    for cuv, _ in counter.most_common(how_many):
+        if cuv.strip():
+            cuvinte_caracteristice.append(cuv)
+    return cuvinte_caracteristice
+
+def build_id_word_dicts(cuvinte_caracteristice):
+    '''Dictionarele word2id si id2word garanteaza o ordine
+    pentru cuvintele caracteristice.
+    '''
+    word2id = {}
+    id2word = {}
+    for idx, cuv in enumerate(cuvinte_caracteristice):
+        word2id[cuv] = idx
+        id2word[idx] = cuv
+    return word2id, id2word
+
+def featurize(text_preprocesat, id2word):
+    """Pentru un text preprocesat dat si un dictionar
+    care mapeaza pentru fiecare pozitie ce cuvant corespunde,
+    returneaza un vector care reprezinta
+    frecventele fiecarui cuvant.
+    """
+    ctr = Counter(text_preprocesat)
+    features = np.zeros(len(id2word))
+    for idx in range(0, len(features)):
+        cuvant = id2word[idx]
+        features[idx] = ctr[cuvant]
+    return features
+
+def featurize_multi(texte, id2word):
+    '''Pentru un set de texte preprocesate si un dictionar
+    care mapeaza pentru fiecare pozitie ce cuvant corespunde,
+    returneaza matricea trasaturilor tuturor textelor.
+    '''
+    all_features = []
+    for text in texte:
+        all_features.append(featurize(text, id2word))
+    return np.array(all_features)
